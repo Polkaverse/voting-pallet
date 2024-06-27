@@ -1,104 +1,166 @@
-// Proposal Pallet
-
-// We make sure this pallet uses `no_std` for compiling to Wasm.
 #![cfg_attr(not(feature = "std"), no_std)]
 
-// Re-export pallet items so that they can be accessed from the crate namespace.
 pub use pallet::*;
+mod types;
+use crate::types::{Proposal, ProposalResultStatus, Vote};
+use frame_support::{dispatch::DispatchResultWithPostInfo, BoundedVec};
+use sp_std::vec::Vec;
 
-// FRAME pallets require their own "mock runtimes" to be able to run unit tests. This module
-// contains a mock runtime specific for testing this pallet's functionality.
-#[cfg(test)]
-mod mock;
+mod constants;
+use crate::constants::{BLOCKS_PER_DAY, PROPOSAL_DURATION_LIMIT};
+use frame_support::traits::Incrementable;
 
-// This module contains the unit tests for this pallet.
-// Learn about pallet unit testing here: https://docs.substrate.io/test/unit-testing/
-#[cfg(test)]
-mod tests;
-
-// Every callable function or "dispatchable" a pallet exposes must have weight values that correctly
-// estimate a dispatchable's execution time. The benchmarking module is used to calculate weights
-// for each dispatchable and generates this pallet's weight.rs file. Learn more about benchmarking here: https://docs.substrate.io/test/benchmark/
-#[cfg(feature = "runtime-benchmarks")]
-mod benchmarking;
 pub mod weights;
-pub use weights::*;
+pub use weights::WeightInfo;
 
-// All pallet logic is defined in its own module and must be annotated by the `pallet` attribute.
-#[frame_support::pallet]
+#[frame_support::pallet(dev_mode)]
 pub mod pallet {
-	// Import various useful types required by all FRAME pallets.
 	use super::*;
 	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 
-	// The `Pallet` struct serves as a placeholder to implement traits, methods and dispatchables
-	// (`Call`s) in this pallet.
-	#[pallet::pallet]
-	pub struct Pallet<T>(_);
-
-	/// The pallet's configuration trait.
-	///
-	/// All our types and constants a pallet depends on must be declared here.
-	/// These types are defined generically and made concrete when the pallet is declared in the
-	/// `runtime/src/lib.rs` file of your chain.
+	/// Configure the pallet by specifying the parameters and types on which it depends.
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
-		/// The overarching runtime event type.
+		/// Because this pallet emits events, it depends on the runtime's
+		/// definition of an event.
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
-		/// A type representing the weights required by the dispatchables of this pallet.
-		type WeightInfo: WeightInfo;
+
+		/// Identifier for the Proposal.
+		type ProposalId: Member + Parameter + MaxEncodedLen + Copy + Incrementable;
+
+		/// The maximum length of proposal name/title.
+		#[pallet::constant]
+		type NameLimit: Get<u32>;
+
+		/// The maximum length of proposal description.
+		#[pallet::constant]
+		type DescriptionLimit: Get<u32>;
+
+		/// The maximum length of address.
+		#[pallet::constant]
+		type AccountLimit: Get<u32>;
 	}
 
-	/// A storage item for this pallet.
-	///
-	/// In this template, we are declaring a storage item called `Something` that stores a single
-	/// `u32` value. Learn more about runtime storage here: <https://docs.substrate.io/build/runtime-storage/>
-	#[pallet::storage]
-	pub type Something<T> = StorageValue<_, u32>;
+	#[pallet::pallet]
+	#[pallet::without_storage_info]
+	pub struct Pallet<T>(_);
 
-	/// Events that functions in this pallet can emit.
-	///
-	/// Events are a simple means of indicating to the outside world (such as dApps, chain explorers
-	/// or other users) that some notable update in the runtime has occurred. In a FRAME pallet, the
-	/// documentation for each event field and its parameters is added to a node's metadata so it
-	/// can be used by external interfaces or tools.
-	///
-	///	The `generate_deposit` macro generates a function on `Pallet` called `deposit_event` which
-	/// will convert the event type of your pallet into `RuntimeEvent` (declared in the pallet's
-	/// [`Config`] trait) and deposit it using [`frame_system::Pallet::deposit_event`].
+	/// Store new proposal with a unique proposal id for a particular community
+	#[pallet::storage]
+	#[pallet::getter(fn proposals)]
+	pub type Proposals<T: Config> = StorageMap<
+		_,
+		Blake2_128Concat,
+		T::ProposalId,
+		Proposal<
+			T::AccountId,
+			<T as pallet::Config>::NameLimit,
+			<T as Config>::DescriptionLimit,
+			T::AccountLimit,
+		>,
+		OptionQuery,
+	>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn proposal_expire)]
+	pub type ProposalExpireTime<T: Config> =
+		StorageMap<_, Identity, BlockNumberFor<T>, T::ProposalId, OptionQuery>;
+
+	/// Stores the `ProposalId` that is going to be used for the next proposal.
+	/// This gets incremented whenever a new proposal is created.
+	#[pallet::storage]
+	pub(super) type NextProposalId<T: Config> = StorageValue<_, T::ProposalId, OptionQuery>;
+
+	/// Store the `Proposal Result`
+	#[pallet::storage]
+	pub(super) type ProposalResult<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::ProposalId, ProposalResultStatus, OptionQuery>;
+
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
-	pub enum Event<T: Config> {}
-
-	/// Errors that can be returned by this pallet.
-	///
-	/// Errors tell users that something went wrong so it's important that their naming is
-	/// informative. Similar to events, error documentation is added to a node's metadata so it's
-	/// equally important that they have helpful documentation associated with them.
-	///
-	/// This type of runtime error can be up to 4 bytes in size should you want to return additional
-	/// information.
-	#[pallet::error]
-	pub enum Error<T> {
-		/// The value retrieved was `None` as no value was previously set.
-		NoneValue,
-		/// There was an attempt to increment the value in storage over `u32::MAX`.
-		StorageOverflow,
+	pub enum Event<T: Config> {
+		/// Created Proposals [Proposal Id]
+		CreatedProposal(T::ProposalId),
 	}
 
-	/// The pallet's dispatchable functions ([`Call`]s).
-	///
-	/// Dispatchable functions allows users to interact with the pallet and invoke state changes.
-	/// These functions materialize as "extrinsics", which are often compared to transactions.
-	/// They must always return a `DispatchResult` and be annotated with a weight and call index.
-	///
-	/// The [`call_index`] macro is used to explicitly
-	/// define an index for calls in the [`Call`] enum. This is useful for pallets that may
-	/// introduce new dispatchables over time. If the order of a dispatchable changes, its index
-	/// will also change which will break backwards compatibility.
-	///
-	/// The [`weight`] macro is used to assign a weight to each call.
+	#[pallet::error]
+	pub enum Error<T> {
+		/// Proposal Does Not Exist.
+		ProposalDoesNotExist,
+		/// Invalid description given.
+		BadDescription,
+		/// Invalid Proposal duration.
+		InvalidProposalDuration,
+		/// New account can't be added due to account limit.
+		AccountLimitReached,
+	}
+
+	#[pallet::hooks]
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
+
 	#[pallet::call]
-	impl<T: Config> Pallet<T> {}
+	impl<T: Config> Pallet<T> {
+		#[pallet::call_index(0)]
+		// #[pallet::weight(<T as Config>::WeightInfo::create_proposal())]
+		pub fn create_proposal(
+			origin: OriginFor<T>,
+			name: BoundedVec<u8, <T as pallet::Config>::NameLimit>,
+			description: BoundedVec<u8, <T as pallet::Config>::DescriptionLimit>,
+			proposal_duration: u32,
+		) -> DispatchResultWithPostInfo {
+			let origin = ensure_signed(origin)?;
+			ensure!(
+				(1..=PROPOSAL_DURATION_LIMIT).contains(&proposal_duration),
+				Error::<T>::InvalidProposalDuration
+			);
+
+			Self::do_create_proposal(origin, name, description, proposal_duration)
+		}
+	}
+}
+
+impl<T: Config> Pallet<T> {
+	pub fn do_create_proposal(
+		proposer_account: T::AccountId,
+		name: BoundedVec<u8, <T as pallet::Config>::NameLimit>,
+		description: BoundedVec<u8, <T as pallet::Config>::DescriptionLimit>,
+		proposal_duration: u32,
+	) -> DispatchResultWithPostInfo {
+		let bounded_account: BoundedVec<T::AccountId, <T as Config>::AccountLimit> =
+			Vec::new().clone().try_into().map_err(|_| Error::<T>::AccountLimitReached)?;
+
+		let new_proposal = Proposal {
+			proposer: proposer_account.clone(),
+			name,
+			description,
+			status: true,
+			voter_accounts: bounded_account.clone(),
+			in_support: bounded_account.clone(),
+			in_oppose: bounded_account.clone(),
+		};
+
+		let proposal_id = NextProposalId::<T>::get().unwrap_or(
+			T::ProposalId::initial_value()
+				.expect("Not Found")
+				.increment()
+				.expect("Not Found"),
+		);
+
+		// Storing the proposal
+		<Proposals<T>>::insert(proposal_id, &new_proposal);
+
+		// Set up the expire time of a particular proposal with community id.
+		let total_block: u32 = BLOCKS_PER_DAY * proposal_duration;
+
+		let expire_block = frame_system::Pallet::<T>::block_number() + total_block.into();
+		ProposalExpireTime::<T>::insert(expire_block, proposal_id);
+
+		let next_proposal_id = proposal_id.increment().expect("REASON");
+		NextProposalId::<T>::set(Some(next_proposal_id));
+
+		Self::deposit_event(Event::CreatedProposal(proposal_id));
+
+		Ok(().into())
+	}
 }
