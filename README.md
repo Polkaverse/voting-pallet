@@ -1,1 +1,1 @@
-# voting-pallet
+# Voting pallet
