@@ -1,1 +1,1 @@
-# Voting pallet
+# Decentralized Voting System
