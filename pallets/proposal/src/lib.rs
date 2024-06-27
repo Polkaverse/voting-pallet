@@ -82,6 +82,8 @@ pub mod pallet {
 	pub enum Event<T: Config> {
 		/// Created Proposals [Proposal Id]
 		CreatedProposal(T::ProposalId),
+		/// Submitted Proposal [Proposal Id]
+		VoteCasted(T::ProposalId),
 	}
 
 	#[pallet::error]
@@ -90,10 +92,16 @@ pub mod pallet {
 		ProposalDoesNotExist,
 		/// Invalid description given.
 		BadDescription,
-		/// Invalid Proposal duration.
-		InvalidProposalDuration,
+		/// Proposal got inactive.
+		ProposalNotActive,
+		/// Duplicate vote.
+		DuplicateVote,
 		/// New account can't be added due to account limit.
 		AccountLimitReached,
+		/// Invalid Proposal duration.
+		InvalidProposalDuration,
+		/// Proposal owner cannot vote on proposal.
+		ProposerCannotVote,
 	}
 
 	#[pallet::hooks]
@@ -116,6 +124,59 @@ pub mod pallet {
 			);
 
 			Self::do_create_proposal(origin, name, description, proposal_duration)
+		}
+
+		#[pallet::call_index(1)]
+		// #[pallet::weight(<T as Config>::WeightInfo::cast_vote())]
+		pub fn cast_vote(
+			origin: OriginFor<T>,
+			proposal_id: T::ProposalId,
+			choice: Vote,
+		) -> DispatchResultWithPostInfo {
+			let origin = ensure_signed(origin)?;
+
+			let proposal =
+				Proposals::<T>::get(proposal_id).ok_or(Error::<T>::ProposalDoesNotExist)?;
+
+			ensure!(proposal.status, Error::<T>::ProposalNotActive);
+
+			ensure!(!(proposal.proposer == origin), Error::<T>::ProposerCannotVote);
+
+			ensure!(!(proposal.voter_accounts).contains(&origin), Error::<T>::DuplicateVote);
+
+			// Add this account in voter_accounts list and respective vote option.
+			Proposals::<T>::mutate(proposal_id, |proposal_details| -> DispatchResult {
+				let proposal_info =
+					proposal_details.as_mut().ok_or(Error::<T>::ProposalDoesNotExist)?;
+
+				proposal_info
+					.voter_accounts
+					.try_push(origin.clone())
+					.ok()
+					.ok_or(Error::<T>::AccountLimitReached)?;
+
+				match choice {
+					Vote::YES => {
+						proposal_info
+							.in_support
+							.try_push(origin.clone())
+							.ok()
+							.ok_or(Error::<T>::AccountLimitReached)?;
+						Ok(())
+					},
+					Vote::NO => {
+						proposal_info
+							.in_oppose
+							.try_push(origin.clone())
+							.ok()
+							.ok_or(Error::<T>::AccountLimitReached)?;
+						Ok(())
+					},
+				}
+			})?;
+
+			Self::deposit_event(Event::VoteCasted(proposal_id));
+			Ok(().into())
 		}
 	}
 }
