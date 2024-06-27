@@ -91,8 +91,8 @@ pub mod pallet {
 		CreatedProposal(T::ProposalId),
 		/// Submitted Proposal [Proposal Id]
 		VoteCasted(T::ProposalId),
-		/// Proposal state changed [Proposal Id]
-		ProposalStateChanged(T::ProposalId),
+		/// Proposal closed [Proposal Id]
+		ProposalClosed(T::ProposalId),
 	}
 
 	#[pallet::error]
@@ -120,10 +120,12 @@ pub mod pallet {
 		fn on_initialize(block_number: BlockNumberFor<T>) -> Weight {
 			let option_proposal_expire = ProposalExpireTime::<T>::get(block_number);
 
+            // There is any proposal deadline ending on this block then this will Announce the Result.
 			if let Some(proposal_id) = option_proposal_expire {
 				Proposals::<T>::try_mutate(proposal_id, |proposal_detail| -> DispatchResult {
-					let proposal_data =
-						proposal_detail.as_mut().ok_or(Error::<T>::ProposalDoesNotExist)?;
+					let proposal_data = proposal_detail
+						.as_mut()
+						.ok_or(Error::<T>::ProposalDoesNotExist)?;
 
 					// fetching the vote information of the proposal.
 					let support = &proposal_data.in_support.len();
@@ -139,7 +141,7 @@ pub mod pallet {
 
 					proposal_data.is_active = false;
 
-					Self::deposit_event(Event::<T>::ProposalStateChanged(proposal_id));
+					Self::deposit_event(Event::<T>::ProposalClosed(proposal_id));
 
 					Ok(())
 				})
@@ -151,6 +153,23 @@ pub mod pallet {
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
+		/// Create a new proposal on the chain.
+		///
+		/// # Arguments
+		///
+		/// * `origin` - The origin of the transaction, must be a signed account.
+		/// * `name` - A bounded vector containing the name of the proposal.
+		/// * `description` - A bounded vector containing the description of the proposal.
+		/// * `proposal_duration` - The duration for which the proposal will be open for voting,
+		///   specified in terms of a number of days. This value must be within the range defined
+		///   by `PROPOSAL_DURATION_LIMIT`.
+		///
+		/// # Errors
+		///
+		/// * `Error::<T>::InvalidProposalDuration` - Returned if the specified proposal duration
+		///   is not within the valid range defined by `PROPOSAL_DURATION_LIMIT`.
+		///
+		/// On successfully completion of method CreatedProposal Event will Emit.
 		#[pallet::call_index(0)]
 		#[pallet::weight(<T as Config>::WeightInfo::create_proposal())]
 		pub fn create_proposal(
@@ -160,6 +179,8 @@ pub mod pallet {
 			proposal_duration: u32,
 		) -> DispatchResultWithPostInfo {
 			let origin = ensure_signed(origin)?;
+
+			// The given duration should be in the range from 1 to the given Duration limit.
 			ensure!(
 				(1..=PROPOSAL_DURATION_LIMIT).contains(&proposal_duration),
 				Error::<T>::InvalidProposalDuration
@@ -168,6 +189,23 @@ pub mod pallet {
 			Self::do_create_proposal(origin, name, description, proposal_duration)
 		}
 
+		/// Cast a vote on an existing proposal.
+		///
+		/// # Arguments
+		///
+		/// * `origin` - The origin of the transaction, must be a signed account.
+		/// * `proposal_id` - The identifier of the proposal to vote on.
+		/// * `choice` - The vote choice, which can be either `Vote::YES` or `Vote::NO`.
+		///
+		/// # Errors
+		///
+		/// * `Error::<T>::ProposalDoesNotExist` - Returned if the specified proposal does not exist.
+		/// * `Error::<T>::ProposalNotActive` - Returned if the proposal is not active and cannot be voted on.
+		/// * `Error::<T>::OwnerCannotVote` - Returned if the owner of the proposal attempts to vote on their own proposal.
+		/// * `Error::<T>::DuplicateVote` - Returned if the account has already voted on the proposal.
+		/// * `Error::<T>::AccountLimitReached` - Returned if the number of accounts voting on the proposal exceeds the allowed limit.
+		///
+		/// On successfully completion of method CreatedProposal Event will Emit.
 		#[pallet::call_index(1)]
 		#[pallet::weight(<T as Config>::WeightInfo::vote())]
 		pub fn vote(
@@ -177,19 +215,24 @@ pub mod pallet {
 		) -> DispatchResultWithPostInfo {
 			let origin = ensure_signed(origin)?;
 
+            // Proposal should exist on chain.
 			let proposal =
 				Proposals::<T>::get(proposal_id).ok_or(Error::<T>::ProposalDoesNotExist)?;
 
+            // Proposal is exist or not.
 			ensure!(proposal.is_active, Error::<T>::ProposalNotActive);
 
+            // Proposal owner cannot vote on the proposal.
 			ensure!(!(proposal.owner == origin), Error::<T>::OwnerCannotVote);
 
+            // User should not vote multiple time on the proposal.
 			ensure!(!(proposal.voter_accounts).contains(&origin), Error::<T>::DuplicateVote);
 
 			// Add this account in voter_accounts list and respective vote option.
 			Proposals::<T>::mutate(proposal_id, |proposal_details| -> DispatchResult {
-				let proposal_info =
-					proposal_details.as_mut().ok_or(Error::<T>::ProposalDoesNotExist)?;
+				let proposal_info = proposal_details
+					.as_mut()
+					.ok_or(Error::<T>::ProposalDoesNotExist)?;
 
 				proposal_info
 					.voter_accounts
@@ -230,8 +273,10 @@ impl<T: Config> Pallet<T> {
 		description: BoundedVec<u8, <T as pallet::Config>::DescriptionLimit>,
 		proposal_duration: u32,
 	) -> DispatchResultWithPostInfo {
-		let bounded_account: BoundedVec<T::AccountId, <T as Config>::AccountLimit> =
-			Vec::new().clone().try_into().map_err(|_| Error::<T>::CannotBeBounded)?;
+		let bounded_account: BoundedVec<T::AccountId, <T as Config>::AccountLimit> = Vec::new()
+			.clone()
+			.try_into()
+			.map_err(|_| Error::<T>::CannotBeBounded)?;
 
 		let new_proposal = Proposal {
 			owner: owner.clone(),
@@ -260,6 +305,7 @@ impl<T: Config> Pallet<T> {
 		let expire_block = frame_system::Pallet::<T>::block_number() + total_block.into();
 		ProposalExpireTime::<T>::insert(expire_block, proposal_id);
 
+        // Adding the proposal id for next proposal.
 		let next_proposal_id = proposal_id.increment().expect("NOT FOUND");
 		NextProposalId::<T>::set(Some(next_proposal_id));
 
