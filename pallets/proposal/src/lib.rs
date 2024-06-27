@@ -2,7 +2,7 @@
 
 pub use pallet::*;
 mod types;
-use crate::types::{Proposal, ProposalResultStatus, Vote};
+use crate::types::{Proposal, ProposalStatus, Vote};
 use frame_support::{dispatch::DispatchResultWithPostInfo, BoundedVec};
 use sp_std::vec::Vec;
 
@@ -10,10 +10,10 @@ mod constants;
 use crate::constants::{BLOCKS_PER_DAY, PROPOSAL_DURATION_LIMIT};
 use frame_support::traits::Incrementable;
 
-// #[cfg(feature = "runtime-benchmarks")]
-// mod benchmarking;
-// pub mod weights;
-// pub use weights::WeightInfo;
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarking;
+pub mod weights;
+pub use weights::WeightInfo;
 
 #[cfg(test)]
 mod mock;
@@ -21,7 +21,7 @@ mod mock;
 #[cfg(test)]
 mod tests;
 
-#[frame_support::pallet(dev_mode)]
+#[frame_support::pallet]
 pub mod pallet {
 	use super::*;
 	use frame_support::pallet_prelude::*;
@@ -48,6 +48,9 @@ pub mod pallet {
 		/// The maximum length of address.
 		#[pallet::constant]
 		type AccountLimit: Get<u32>;
+
+		// Weight information
+		type WeightInfo: WeightInfo;
 	}
 
 	#[pallet::pallet]
@@ -66,6 +69,7 @@ pub mod pallet {
 			<T as pallet::Config>::NameLimit,
 			<T as Config>::DescriptionLimit,
 			T::AccountLimit,
+			ProposalStatus,
 		>,
 		OptionQuery,
 	>;
@@ -79,11 +83,6 @@ pub mod pallet {
 	/// This gets incremented whenever a new proposal is created.
 	#[pallet::storage]
 	pub(super) type NextProposalId<T: Config> = StorageValue<_, T::ProposalId, OptionQuery>;
-
-	/// Store the `Proposal Result`
-	#[pallet::storage]
-	pub(super) type ProposalResult<T: Config> =
-		StorageMap<_, Blake2_128Concat, T::ProposalId, ProposalResultStatus, OptionQuery>;
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
@@ -111,7 +110,9 @@ pub mod pallet {
 		/// Invalid Proposal duration.
 		InvalidProposalDuration,
 		/// Proposal owner cannot vote on proposal.
-		ProposerCannotVote,
+		OwnerCannotVote,
+		/// If creation of new bounded vector is not possible
+		CannotBeBounded,
 	}
 
 	#[pallet::hooks]
@@ -131,12 +132,12 @@ pub mod pallet {
 					// Inserting the proposal result according to the voting.
 					// If support is more than the oppose.
 					if support > oppose {
-						ProposalResult::<T>::insert(proposal_id, ProposalResultStatus::Accepted);
+						proposal_data.status = ProposalStatus::Accepted;
 					} else {
-						ProposalResult::<T>::insert(proposal_id, ProposalResultStatus::Rejected);
+						proposal_data.status = ProposalStatus::Rejected;
 					};
 
-					proposal_data.status = false;
+					proposal_data.is_active = false;
 
 					Self::deposit_event(Event::<T>::ProposalStateChanged(proposal_id));
 
@@ -151,7 +152,7 @@ pub mod pallet {
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
 		#[pallet::call_index(0)]
-		// #[pallet::weight(<T as Config>::WeightInfo::create_proposal())]
+		#[pallet::weight(<T as Config>::WeightInfo::create_proposal())]
 		pub fn create_proposal(
 			origin: OriginFor<T>,
 			name: BoundedVec<u8, <T as pallet::Config>::NameLimit>,
@@ -168,7 +169,7 @@ pub mod pallet {
 		}
 
 		#[pallet::call_index(1)]
-		// #[pallet::weight(<T as Config>::WeightInfo::cast_vote())]
+		#[pallet::weight(<T as Config>::WeightInfo::vote())]
 		pub fn vote(
 			origin: OriginFor<T>,
 			proposal_id: T::ProposalId,
@@ -179,9 +180,9 @@ pub mod pallet {
 			let proposal =
 				Proposals::<T>::get(proposal_id).ok_or(Error::<T>::ProposalDoesNotExist)?;
 
-			ensure!(proposal.status, Error::<T>::ProposalNotActive);
+			ensure!(proposal.is_active, Error::<T>::ProposalNotActive);
 
-			ensure!(!(proposal.proposer == origin), Error::<T>::ProposerCannotVote);
+			ensure!(!(proposal.owner == origin), Error::<T>::OwnerCannotVote);
 
 			ensure!(!(proposal.voter_accounts).contains(&origin), Error::<T>::DuplicateVote);
 
@@ -224,22 +225,23 @@ pub mod pallet {
 
 impl<T: Config> Pallet<T> {
 	pub fn do_create_proposal(
-		proposer_account: T::AccountId,
+		owner: T::AccountId,
 		name: BoundedVec<u8, <T as pallet::Config>::NameLimit>,
 		description: BoundedVec<u8, <T as pallet::Config>::DescriptionLimit>,
 		proposal_duration: u32,
 	) -> DispatchResultWithPostInfo {
 		let bounded_account: BoundedVec<T::AccountId, <T as Config>::AccountLimit> =
-			Vec::new().clone().try_into().map_err(|_| Error::<T>::AccountLimitReached)?;
+			Vec::new().clone().try_into().map_err(|_| Error::<T>::CannotBeBounded)?;
 
 		let new_proposal = Proposal {
-			proposer: proposer_account.clone(),
+			owner: owner.clone(),
 			name,
 			description,
-			status: true,
+			is_active: true,
 			voter_accounts: bounded_account.clone(),
 			in_support: bounded_account.clone(),
 			in_oppose: bounded_account.clone(),
+			status: ProposalStatus::VotingInProgress,
 		};
 
 		let proposal_id = NextProposalId::<T>::get().unwrap_or(
@@ -250,9 +252,9 @@ impl<T: Config> Pallet<T> {
 		);
 
 		// Storing the proposal
-		<Proposals<T>>::insert(proposal_id, &new_proposal);
+		Proposals::<T>::insert(proposal_id, &new_proposal);
 
-		// Set up the expire time of a particular proposal with community id.
+		// Set up the expire time of a particular proposal.
 		let total_block: u32 = BLOCKS_PER_DAY * proposal_duration;
 
 		let expire_block = frame_system::Pallet::<T>::block_number() + total_block.into();

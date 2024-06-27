@@ -9,14 +9,16 @@ pub struct Proposal<
 	NameLimit: Get<u32>,
 	DescriptionLimit: Get<u32>,
 	AccountLimit: Get<u32>,
+	ProposalStatus,
 > {
-	pub proposer: AccountId,
+	pub owner: AccountId,
 	pub name: BoundedVec<u8, NameLimit>,
 	pub description: BoundedVec<u8, DescriptionLimit>,
-	pub status: bool,
+	pub is_active: bool,
 	pub voter_accounts: BoundedVec<AccountId, AccountLimit>,
 	pub in_support: BoundedVec<AccountId, AccountLimit>,
 	pub in_oppose: BoundedVec<AccountId, AccountLimit>,
+	pub status: ProposalStatus,
 }
 
 #[derive(PartialEq, Eq, Clone, Encode, Decode, TypeInfo, Debug)]
@@ -27,7 +29,9 @@ pub enum Vote {
 
 /// Result of proposal.
 #[derive(Eq, PartialEq, Clone, TypeInfo, Encode, Decode)]
-pub enum ProposalResultStatus {
+pub enum ProposalStatus {
+	/// Voting in progress.
+	VotingInProgress,
 	/// Proposal is passed.
 	Accepted,
 	/// Proposal is rejected.

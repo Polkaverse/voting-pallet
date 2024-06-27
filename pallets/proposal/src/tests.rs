@@ -1,5 +1,4 @@
-use crate::pallet::ProposalResult;
-use crate::types::ProposalResultStatus;
+use crate::types::ProposalStatus;
 use crate::{mock::*, Error, Proposals, Vote};
 use frame_support::pallet_prelude::ConstU32;
 use frame_support::BoundedVec;
@@ -86,7 +85,7 @@ fn vote_fails_proposer_votes() {
 
 		assert_noop!(
 			Proposal::vote(RuntimeOrigin::signed(1), 1, Vote::YES),
-			Error::<Test>::ProposerCannotVote
+			Error::<Test>::OwnerCannotVote
 		);
 	});
 }
@@ -158,7 +157,7 @@ fn proposal_accepted() {
 
 		run_to_block(15_000);
 
-		assert!(ProposalResult::<Test>::get(1).unwrap() == ProposalResultStatus::Accepted);
+		assert!(Proposals::<Test>::get(1).unwrap().status == ProposalStatus::Accepted);
 	});
 }
 
@@ -174,6 +173,6 @@ fn proposal_rejected() {
 
 		run_to_block(20_000);
 
-		assert!(ProposalResult::<Test>::get(1).unwrap() == ProposalResultStatus::Rejected);
+		assert!(Proposals::<Test>::get(1).unwrap().status == ProposalStatus::Rejected);
 	});
 }

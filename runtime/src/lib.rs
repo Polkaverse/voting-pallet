@@ -44,6 +44,9 @@ pub use sp_runtime::{Perbill, Permill};
 /// Import the template pallet.
 pub use pallet_template;
 
+/// Import the proposal pallet.
+pub use pallet_proposal;
+
 /// An index to a block.
 pub type BlockNumber = u32;
 
@@ -91,8 +94,8 @@ pub mod opaque {
 // https://docs.substrate.io/main-docs/build/upgrade#runtime-versioning
 #[sp_version::runtime_version]
 pub const VERSION: RuntimeVersion = RuntimeVersion {
-	spec_name: create_runtime_str!("solochain-template-runtime"),
-	impl_name: create_runtime_str!("solochain-template-runtime"),
+	spec_name: create_runtime_str!("pankaj-chain"),
+	impl_name: create_runtime_str!("pankaj-chain"),
 	authoring_version: 1,
 	// The version of the runtime specification. A full node will not attempt to use its native
 	//   runtime in substitute for the on-chain Wasm runtime unless all of `spec_name`,
@@ -251,6 +254,17 @@ impl pallet_template::Config for Runtime {
 	type WeightInfo = pallet_template::weights::SubstrateWeight<Runtime>;
 }
 
+pub type ProposalId = u32;
+
+impl pallet_proposal::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type ProposalId = ProposalId;
+	type NameLimit = ConstU32<256>;
+	type DescriptionLimit = ConstU32<1024>;
+	type AccountLimit = ConstU32<100>;
+	type WeightInfo = pallet_proposal::weights::SubstrateWeight<Runtime>;
+}
+
 // Create the runtime by composing the FRAME pallets that were previously configured.
 #[frame_support::runtime]
 mod runtime {
@@ -292,6 +306,9 @@ mod runtime {
 	// Include the custom logic from the pallet-template in the runtime.
 	#[runtime::pallet_index(7)]
 	pub type TemplateModule = pallet_template;
+
+	#[runtime::pallet_index(8)]
+	pub type Proposal = pallet_proposal;
 }
 
 /// The address format for describing accounts.
@@ -342,6 +359,7 @@ mod benches {
 		[pallet_timestamp, Timestamp]
 		[pallet_sudo, Sudo]
 		[pallet_template, TemplateModule]
+		[pallet_proposal, Proposal]
 	);
 }
 
