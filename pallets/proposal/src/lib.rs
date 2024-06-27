@@ -10,8 +10,16 @@ mod constants;
 use crate::constants::{BLOCKS_PER_DAY, PROPOSAL_DURATION_LIMIT};
 use frame_support::traits::Incrementable;
 
-pub mod weights;
-pub use weights::WeightInfo;
+// #[cfg(feature = "runtime-benchmarks")]
+// mod benchmarking;
+// pub mod weights;
+// pub use weights::WeightInfo;
+
+#[cfg(test)]
+mod mock;
+
+#[cfg(test)]
+mod tests;
 
 #[frame_support::pallet(dev_mode)]
 pub mod pallet {
