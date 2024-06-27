@@ -84,6 +84,8 @@ pub mod pallet {
 		CreatedProposal(T::ProposalId),
 		/// Submitted Proposal [Proposal Id]
 		VoteCasted(T::ProposalId),
+		/// Proposal state changed [Proposal Id]
+		ProposalStateChanged(T::ProposalId),
 	}
 
 	#[pallet::error]
@@ -105,7 +107,38 @@ pub mod pallet {
 	}
 
 	#[pallet::hooks]
-	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+		fn on_initialize(block_number: BlockNumberFor<T>) -> Weight {
+			let option_proposal_expire = ProposalExpireTime::<T>::get(block_number);
+
+			if let Some(proposal_id) = option_proposal_expire {
+				Proposals::<T>::try_mutate(proposal_id, |proposal_detail| -> DispatchResult {
+					let proposal_data =
+						proposal_detail.as_mut().ok_or(Error::<T>::ProposalDoesNotExist)?;
+
+					// fetching the vote information of the proposal.
+					let support = &proposal_data.in_support.len();
+					let oppose = &proposal_data.in_oppose.len();
+
+					// Inserting the proposal result according to the voting.
+					// If support is more than the oppose.
+					if support > oppose {
+						ProposalResult::<T>::insert(proposal_id, ProposalResultStatus::Accepted);
+					} else {
+						ProposalResult::<T>::insert(proposal_id, ProposalResultStatus::Rejected);
+					};
+
+					proposal_data.status = false;
+
+					Self::deposit_event(Event::<T>::ProposalStateChanged(proposal_id));
+
+					Ok(())
+				})
+				.expect("Proposal not found");
+			}
+			Weight::zero()
+		}
+	}
 
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
@@ -128,7 +161,7 @@ pub mod pallet {
 
 		#[pallet::call_index(1)]
 		// #[pallet::weight(<T as Config>::WeightInfo::cast_vote())]
-		pub fn cast_vote(
+		pub fn vote(
 			origin: OriginFor<T>,
 			proposal_id: T::ProposalId,
 			choice: Vote,
@@ -203,9 +236,9 @@ impl<T: Config> Pallet<T> {
 
 		let proposal_id = NextProposalId::<T>::get().unwrap_or(
 			T::ProposalId::initial_value()
-				.expect("Not Found")
+				.expect("NOT FOUND")
 				.increment()
-				.expect("Not Found"),
+				.expect("NOT FOUND"),
 		);
 
 		// Storing the proposal
@@ -217,7 +250,7 @@ impl<T: Config> Pallet<T> {
 		let expire_block = frame_system::Pallet::<T>::block_number() + total_block.into();
 		ProposalExpireTime::<T>::insert(expire_block, proposal_id);
 
-		let next_proposal_id = proposal_id.increment().expect("REASON");
+		let next_proposal_id = proposal_id.increment().expect("NOT FOUND");
 		NextProposalId::<T>::set(Some(next_proposal_id));
 
 		Self::deposit_event(Event::CreatedProposal(proposal_id));
